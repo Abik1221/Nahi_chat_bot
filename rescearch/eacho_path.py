@@ -1,0 +1,19 @@
+from aiogram import Bot, Dispatcher, types, executor
+from dotenv import load_dotenv
+import os 
+import logging
+
+load_dotenv()
+api_token = os.getenv("TELEGRAM_BOT_TOKEN")
+
+logging.basicConfig(level=logging.INFO)
+
+bot = Bot(token=api_token)
+db = Dispatcher(bot)
+
+@db.missage_handler(commands=['start','help'])
+async def command_start_handler(message: types.Message):
+    await message.answer("Hello! I Just developed by that stupid Nahom keneni, your besttttt, annoying and lovely friend. How can I assist you today?")
+    
+if __name__ == '__main__':
+    executor.start_polling(db, skip_updates=True)
