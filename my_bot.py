@@ -1,70 +1,54 @@
-from aiogram import Bot, Dispatcher, types
-from dotenv import load_dotenv
-import os
 import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
 from huggingface_hub import InferenceClient
-from aiogram import executor
 
-
-# Load environment variables
-load_dotenv()
-telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-hf_token = os.getenv("HF_API_TOKEN")
-
-# Logging
+# Enable logging
 logging.basicConfig(level=logging.INFO)
 
+# Your Telegram bot token
+API_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+
+# Your Hugging Face API token
+HF_API_TOKEN = "YOUR_HUGGINGFACE_API_TOKEN"
+
 # Initialize bot and dispatcher
-bot = Bot(token=telegram_bot_token)
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# Initialize Hugging Face client
-hf_client = InferenceClient(token=hf_token)
+# Initialize Hugging Face Inference Client
+hf_client = InferenceClient(token=HF_API_TOKEN)
 
-# Class to store chat history
-class Reference:
+# Simple conversation history (optional)
+class Conversation:
     def __init__(self):
         self.history = ""
 
-reference = Reference()
+reference = Conversation()
 
-# /start and /help commands
-@dp.message_handler(commands=['start', 'help'])
-async def send_welcome(message: types.Message):
-    await message.reply(
-        "👋 Hello! I'm a chatbot created by your friend Nahom.\n"
-        "Type any question, and I’ll try to help you.\n"
-        "Use /clear_past to reset the chat memory."
-    )
-
-# /clear_past command
-@dp.message_handler(commands=['clear_past'])
-async def clear_history(message: types.Message):
-    reference.history = ""
-    await message.reply("✅ Chat memory cleared.")
-
-# Main message handler
 @dp.message_handler()
 async def handle_message(message: types.Message):
-    user_input = message.text
+    user_input = message.text.strip()
     prompt = f"{reference.history}\nUser: {user_input}\nAI:"
 
     try:
         result = hf_client.text_generation(
+            model="gpt2",          # You can change this to another supported model
             prompt=prompt,
-            model="tiiuae/falcon-7b-instruct",  # Open-access Hugging Face model
             max_new_tokens=100,
-            temperature=0.7
+            temperature=0.7,
         )
+        bot_reply = result[0]["generated_text"].strip()
 
-        bot_reply = result.strip()
+        # Update conversation history (optional, simple approach)
         reference.history += f"\nUser: {user_input}\nAI: {bot_reply}"
-        await bot.send_message(chat_id=message.chat.id, text=bot_reply)
+
+        await message.reply(bot_reply)
 
     except Exception as e:
         logging.exception("Hugging Face request failed")
-        await bot.send_message(chat_id=message.chat.id, text=f"❌ Error: {str(e)}")
+        await message.reply(f"❌ Error: {str(e)}")
 
-# Run the bot
-if __name__ == "__main__":
+if __name__ == '__main__':
+    logging.info("Starting bot...")
     executor.start_polling(dp, skip_updates=True)
