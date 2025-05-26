@@ -15,5 +15,12 @@ dp = Dispatcher(bot)
 async def command_start_handler(message: types.Message):
     await message.answer("Hello! \n I Just developed by that stupid Nahom keneni, \n your besttttt, annoying and lovely friend. \n How can I assist you today?")
     
+
+    
+    
+@dp.message_handler()
+async def echo(message: types.Message):
+    await message.reply(message.text)
+    
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
