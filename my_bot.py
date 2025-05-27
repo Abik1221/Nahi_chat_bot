@@ -1,5 +1,5 @@
 from aiogram import Bot, Dispatcher, types
-from aiogram import executor
+from aiogram.utils import executor
 from dotenv import load_dotenv
 import os
 import logging
@@ -8,88 +8,46 @@ import torch
 
 # Load environment variables
 load_dotenv()
-telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Setup logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 
-# Initialize Telegram bot
-bot = Bot(token=telegram_bot_token)
+# Initialize bot and dispatcher
+bot = Bot(token=telegram_token)
 dp = Dispatcher(bot)
 
-# Initialize the model and tokenizer
-model_name = "microsoft/DialoGPT-medium"  # Using medium instead of large for better performance
+# Load DialoGPT-small
+model_name = "microsoft/DialoGPT-small"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name)
 
-# Chat history management
-class ChatHistory:
-    def __init__(self):
-        self.history = []
-        self.max_history = 4  # Keep last 4 exchanges
-    
-    def add_exchange(self, user_input, bot_response):
-        self.history.extend([user_input, bot_response])
-        if len(self.history) > self.max_history * 2:
-            self.history = self.history[-self.max_history * 2:]
-    
-    def get_prompt(self, new_input):
-        prompt = ""
-        for i in range(0, len(self.history), 2):
-            prompt += f"User: {self.history[i]}\nAI: {self.history[i+1]}\n"
-        prompt += f"User: {new_input}\nAI:"
-        return prompt
-    
-    def clear(self):
-        self.history = []
+# Store chat history per user
+chat_history = {}
 
-chat_history = ChatHistory()
-
-# Command handlers
 @dp.message_handler(commands=['start', 'help'])
-async def send_welcome(message: types.Message):
-    await message.reply(
-        "👋 Hello! I'm your AI assistant.\n"
-        "Just type your message and I'll respond.\n"
-        "Use /clear to reset our conversation."
-    )
+async def welcome(message: types.Message):
+    await message.reply("👋 Hello! I'm a chatbot powered by DialoGPT. Just message me anything!")
 
-@dp.message_handler(commands=['clear'])
-async def clear_history(message: types.Message):
-    chat_history.clear()
-    await message.reply("✅ Conversation history cleared.")
-
-# Message handler
 @dp.message_handler()
-async def handle_message(message: types.Message):
-    try:
-        # Prepare the input
-        prompt = chat_history.get_prompt(message.text)
-        
-        # Tokenize and generate response
-        inputs = tokenizer.encode(prompt, return_tensors="pt")
-        outputs = model.generate(
-            inputs,
-            max_length=1000,
-            pad_token_id=tokenizer.eos_token_id,
-            no_repeat_ngram_size=3,
-            do_sample=True,
-            top_k=50,
-            top_p=0.9,
-            temperature=0.7
-        )
-        
-        # Decode and clean the response
-        full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        bot_response = full_response[len(prompt):].strip()
-        
-        # Update history and send response
-        chat_history.add_exchange(message.text, bot_response)
-        await message.reply(bot_response)
-    
-    except Exception as e:
-        logging.error(f"Error generating response: {str(e)}")
-        await message.reply("❌ Sorry, I encountered an error. Please try again.")
+async def chat(message: types.Message):
+    user_id = str(message.from_user.id)
+    history = chat_history.get(user_id, None)
+
+    # Encode user message
+    new_input_ids = tokenizer.encode(message.text + tokenizer.eos_token, return_tensors='pt')
+
+    # Combine with history if exists
+    bot_input_ids = torch.cat([history, new_input_ids], dim=-1) if history is not None else new_input_ids
+
+    # Generate response
+    response_ids = model.generate(bot_input_ids, max_length=1000, pad_token_id=tokenizer.eos_token_id)
+    response = tokenizer.decode(response_ids[:, bot_input_ids.shape[-1]:][0], skip_special_tokens=True)
+
+    # Save new history
+    chat_history[user_id] = bot_input_ids
+
+    await message.reply(response)
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
