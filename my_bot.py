@@ -1,53 +1,88 @@
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
-from dotenv import load_dotenv
 import os
 import logging
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
+from aiogram import Bot, Dispatcher, types, executor
+from dotenv import load_dotenv
+from huggingface_hub import InferenceClient
+from traceback import format_exc
 
-# Load environment variables
+# Load .env file
 load_dotenv()
-telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Logging setup
+# Tokens from environment
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+
+# Logging
 logging.basicConfig(level=logging.INFO)
 
-# Initialize bot and dispatcher
-bot = Bot(token=telegram_token)
+# Hugging Face and Telegram bot setup
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(bot)
+hf_client = InferenceClient(token=HF_API_TOKEN)
 
-# Load DialoGPT-small
-model_name = "microsoft/DialoGPT-small"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
+# Conversation state
+class ChatHistory:
+    def __init__(self):
+        self.history = []
 
-# Store chat history per user
-chat_history = {}
+    def reset(self):
+        self.history = []
 
-@dp.message_handler(commands=['start', 'help'])
-async def welcome(message: types.Message):
-    await message.reply("👋 Hello! I'm a chatbot powered by DialoGPT. Just message me anything!")
+    def add_user(self, msg):
+        self.history.append(f"User: {msg}")
 
+    def add_bot(self, msg):
+        self.history.append(f"Assistant: {msg}")
+
+    def get_prompt(self):
+        return "\n".join(self.history) + "\nAssistant:"
+
+chat = ChatHistory()
+
+# Handle /start and /help
+@dp.message_handler(commands=["start", "help"])
+async def start(message: types.Message):
+    chat.reset()
+    await message.reply(
+        "👋 Hello! I'm Nahi_Bot, created by your friend Nahom.\n"
+        "Just send me a message and I’ll try to help.\n"
+        "Use /clear_past to reset the chat memory."
+    )
+
+# Handle /clear_past
+@dp.message_handler(commands=["clear_past"])
+async def clear(message: types.Message):
+    chat.reset()
+    await message.reply("✅ Chat memory cleared.")
+
+# Handle user messages
 @dp.message_handler()
-async def chat(message: types.Message):
-    user_id = str(message.from_user.id)
-    history = chat_history.get(user_id, None)
+async def main_bot(message: types.Message):
+    try:
+        user_input = message.text
+        chat.add_user(user_input)
+        prompt = chat.get_prompt()
 
-    # Encode user message
-    new_input_ids = tokenizer.encode(message.text + tokenizer.eos_token, return_tensors='pt')
+        # Call DeepSeek model using text generation
+        response = hf_client.text_generation(
+            model="tiiuae/falcon-7b-instruct",
+            prompt=prompt,
+            max_new_tokens=200,
+            temperature=0.7,
+            stop=["User:", "Assistant:"]
+        )
 
-    # Combine with history if exists
-    bot_input_ids = torch.cat([history, new_input_ids], dim=-1) if history is not None else new_input_ids
+        # Extract assistant's reply
+        answer = response.generated_text.replace(prompt, "").strip()
+        chat.add_bot(answer)
 
-    # Generate response
-    response_ids = model.generate(bot_input_ids, max_length=1000, pad_token_id=tokenizer.eos_token_id)
-    response = tokenizer.decode(response_ids[:, bot_input_ids.shape[-1]:][0], skip_special_tokens=True)
+        await bot.send_message(chat_id=message.chat.id, text=answer)
 
-    # Save new history
-    chat_history[user_id] = bot_input_ids
+    except Exception as e:
+        error_details = format_exc()
+        print(f"❌ Exception occurred:\n{error_details}")
+        await bot.send_message(chat_id=message.chat.id, text="❌ Error: Something went wrong. Please try again.")
 
-    await message.reply(response)
-
+# Run the bot
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
